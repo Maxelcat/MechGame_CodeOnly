@@ -5,14 +5,10 @@ using UnityEngine;
 
 public static class CodeSyncUtility
 {
-    // Menu item: Tools → Sync Code To Git Repo
     [MenuItem("Tools/Sync Code To Git Repo")]
     public static void SyncCodeToGitRepo()
     {
-        // Project root is the parent of the Assets folder
         string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-
-        // Our PowerShell script location (ProjectRoot/Tools/Sync-UnityCodeToGit.ps1)
         string scriptPath = Path.Combine(projectRoot, "Tools", "Sync-UnityCodeToGit.ps1");
 
         if (!File.Exists(scriptPath))
@@ -21,7 +17,6 @@ public static class CodeSyncUtility
             return;
         }
 
-        // Build PowerShell arguments
         string arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"";
 
         var psi = new ProcessStartInfo
@@ -48,13 +43,28 @@ public static class CodeSyncUtility
                 string error = process.StandardError.ReadToEnd();
                 process.WaitForExit();
 
+                bool success = process.ExitCode == 0;
+
                 if (!string.IsNullOrWhiteSpace(output))
                     UnityEngine.Debug.Log("[Code Sync] " + output);
 
                 if (!string.IsNullOrWhiteSpace(error))
-                    UnityEngine.Debug.LogError("[Code Sync ERROR] " + error);
-                else
-                    UnityEngine.Debug.Log("[Code Sync] Finished with exit code " + process.ExitCode);
+                {
+                    if (success)
+                    {
+                        // Git often writes normal progress to stderr, so just log it as info
+                        UnityEngine.Debug.Log("[Code Sync git] " + error);
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogError($"[Code Sync ERROR] ExitCode {process.ExitCode}\n{error}");
+                    }
+                }
+
+                if (success)
+                {
+                    UnityEngine.Debug.Log("[Code Sync] Finished successfully (exit code " + process.ExitCode + ")");
+                }
             }
         }
         catch (System.Exception ex)
