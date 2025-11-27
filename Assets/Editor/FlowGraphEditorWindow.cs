@@ -353,6 +353,8 @@ namespace TacticsGame.Flow.Editor
 
         internal bool SuppressNextContextMenu;
 
+        private bool m_isPopulating;
+
         public FlowGraphView()
         {
             style.flexGrow = 1;
@@ -372,6 +374,8 @@ namespace TacticsGame.Flow.Editor
 
         public void Populate(FlowGraph graph)
         {
+            m_isPopulating = true;
+
             DeleteElements(graphElements.ToList());
             m_nodeViews.Clear();
             m_graph = graph;
@@ -380,7 +384,10 @@ namespace TacticsGame.Flow.Editor
             UpdateViewTransform(Vector3.zero, Vector3.one);
 
             if (graph == null || graph.Nodes == null)
+            {
+                m_isPopulating = false;
                 return;
+            }
 
             // Create node views
             foreach (var nodeData in graph.Nodes)
@@ -425,7 +432,10 @@ namespace TacticsGame.Flow.Editor
                     }).ExecuteLater(0);
                 }
             }
+
+            m_isPopulating = false;
         }
+
 
         public override List<Port> GetCompatiblePorts(Port startPort, NodeAdapter nodeAdapter)
         {
@@ -526,15 +536,29 @@ namespace TacticsGame.Flow.Editor
             if (m_graph == null || view == null)
                 return;
 
+            // Update the asset data
+            RemoveNodeData(view);
+
+            // Remove the visual node from the graph view
+            RemoveElement(view);
+        }
+
+
+        private void RemoveNodeData(FlowNodeView view)
+        {
+            if (m_graph == null || view == null)
+                return;
+
             Undo.RecordObject(m_graph, "Delete Flow Node");
 
+            // Remove from array
             var nodes = m_graph.Nodes != null ? m_graph.Nodes.ToList() : new List<FlowNodeData>();
             if (nodes.Remove(view.NodeData))
             {
                 m_graph.Nodes = nodes.ToArray();
             }
 
-            // Clear any NextNodeId or sequence/branch references to this node
+            // Clear references in other nodes
             if (m_graph.Nodes != null)
             {
                 foreach (var n in m_graph.Nodes)
@@ -561,18 +585,25 @@ namespace TacticsGame.Flow.Editor
                                 n.BranchOptionNextNodeIds[i] = string.Empty;
                         }
                     }
+
+                    if (!string.IsNullOrEmpty(n.LoopBodyNodeId) &&
+                        n.LoopBodyNodeId == view.NodeData.NodeId)
+                    {
+                        n.LoopBodyNodeId = string.Empty;
+                    }
                 }
             }
 
-            RemoveElement(view);
             m_nodeViews.Remove(view.NodeData.NodeId);
-
             EditorUtility.SetDirty(m_graph);
         }
 
         private GraphViewChange OnGraphViewChanged(GraphViewChange change)
         {
             if (m_graph == null)
+                return change;
+
+            if (m_isPopulating)
                 return change;
 
             // New edges → update data via definitions
@@ -612,6 +643,11 @@ namespace TacticsGame.Flow.Editor
                         def.OnEdgeDisconnected(fromView.NodeData, index, toView.NodeData);
 
                         EditorUtility.SetDirty(m_graph);
+                    }
+                    else if (element is FlowNodeView nodeView)
+                    {
+                        // Node deleted via Delete key / GraphView menu → remove from asset too.
+                        RemoveNodeData(nodeView);
                     }
                 }
             }
