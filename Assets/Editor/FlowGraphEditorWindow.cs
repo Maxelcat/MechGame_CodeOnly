@@ -29,6 +29,7 @@ namespace TacticsGame.Flow.Editor
 
         // New: keep a reference so we can sync it when loading graphs
         private ObjectField m_graphField;
+        private ToolbarToggle m_graphBindingsToggle;
 
         // ----- Entry points -----
 
@@ -146,31 +147,23 @@ namespace TacticsGame.Flow.Editor
             toolbar.Add(saveButton);
 
             // Graph Bindings toggle
-            var graphBindingsToggle = new ToolbarToggle { text = "Graph Bindings" };
-            graphBindingsToggle.value = m_showGraphBindings;
-            graphBindingsToggle.RegisterValueChangedCallback(evt =>
+            m_graphBindingsToggle = new ToolbarToggle { text = "Graph Bindings" };
+            m_graphBindingsToggle.value = m_showGraphBindings;
+            m_graphBindingsToggle.RegisterValueChangedCallback(evt =>
             {
                 m_showGraphBindings = evt.newValue;
 
                 if (m_showGraphBindings)
                 {
-                    // entering bindings mode – remember current selection and clear it
-                    m_previousSelectedNodeView = m_selectedNodeView;
-                    m_selectedNode = null;
+                    // Entering Graph Bindings mode: clear node selection
                     m_selectedNodeView = null;
-                }
-                else
-                {
-                    // leaving bindings mode – restore previous node selection if any
-                    if (m_previousSelectedNodeView != null)
-                    {
-                        OnNodeSelected(m_previousSelectedNodeView);
-                    }
+                    m_selectedNode = null;
+                    m_graphView?.ClearSelection();
                 }
 
                 m_inspectorContainer?.MarkDirtyRepaint();
             });
-            toolbar.Add(graphBindingsToggle);
+            toolbar.Add(m_graphBindingsToggle);
 
             // Show Details toggle
             var showDetailsToggle = new ToolbarToggle { text = "Show Details" };
@@ -209,13 +202,20 @@ namespace TacticsGame.Flow.Editor
 
         private void OnNodeSelected(FlowNodeView view)
         {
-            // leaving graph bindings mode when selecting a node
-            m_showGraphBindings = false;
+            // If we were in Graph Bindings mode, leave it
+            if (m_showGraphBindings)
+            {
+                m_showGraphBindings = false;
+                if (m_graphBindingsToggle != null)
+                    m_graphBindingsToggle.SetValueWithoutNotify(false);
+            }
 
             m_selectedNodeView = view;
             m_selectedNode = view != null ? view.NodeData : null;
+
             m_inspectorContainer?.MarkDirtyRepaint();
         }
+
 
         // ----- Inspector drawing -----
 
@@ -394,6 +394,39 @@ namespace TacticsGame.Flow.Editor
             grid.StretchToParentSize();
 
             graphViewChanged = OnGraphViewChanged;
+
+            RegisterCallback<MouseDownEvent>(OnMouseDownInGraph);
+            RegisterCallback<MouseUpEvent>(OnMouseUpInGraph);
+        }
+
+        private void OnMouseDownInGraph(MouseDownEvent evt)
+        {
+            // Left click only
+            if (evt.button != 0)
+                return;
+
+            // If we clicked on a node, let normal selection handling do its thing
+            var ve = evt.target as VisualElement;
+            var nodeView = ve?.GetFirstOfType<FlowNodeView>();
+            if (nodeView != null)
+                return;
+
+            // Clicked on empty background → clear selection + inspector
+            ClearSelection();
+            OnNodeSelected?.Invoke(null);
+        }
+
+        private void OnMouseUpInGraph(MouseUpEvent evt)
+        {
+            if (evt.button != 0)
+                return;
+
+            // If, after this click, there are no selected elements,
+            // clear the inspector / selection state in the editor window.
+            if (selection.Count == 0)
+            {
+                OnNodeSelected?.Invoke(null);
+            }
         }
 
         public void Populate(FlowGraph graph, bool frameOnStart = false)
@@ -513,34 +546,93 @@ namespace TacticsGame.Flow.Editor
             }
         }
 
-        // Helper used both by right-click and edge-drop menus
-        internal void AppendAddNodeActions(GenericMenu menu, Vector2 graphPosition,
-            FlowNodeView fromNode, int fromOutputIndex)
+        // Shared helper to build menu items
+        private void BuildAddNodeMenuItems(
+            Vector2 graphPosition,
+            FlowNodeView fromNode,
+            int fromOutputIndex,
+            Action<string, FlowNodeType> addItem)
         {
-            void AddItem(string label, FlowNodeType type)
-            {
-                menu.AddItem(new GUIContent(label), false, () =>
-                {
-                    var newView = CreateNode(type, graphPosition);
-                    if (fromNode != null && fromOutputIndex >= 0 && newView != null && newView.InputPort != null)
-                    {
-                        var outPort = fromNode.GetOutputPortForIndex(fromOutputIndex);
-                        if (outPort != null)
-                        {
-                            var edge = outPort.ConnectTo(newView.InputPort);
-                            AddElement(edge);
-                        }
-                    }
-                });
-            }
+            addItem("Dialogue Node", FlowNodeType.Dialogue);
+            addItem("Delay Node", FlowNodeType.Delay);
+            addItem("WaitForTrigger Node", FlowNodeType.WaitForTrigger);
+            addItem("Objective Node", FlowNodeType.Objective);
+            addItem("Branch Node", FlowNodeType.Branch);
+            addItem("Sequence Node", FlowNodeType.Sequence);
+            addItem("Loop Node", FlowNodeType.Loop);
+        }
 
-            AddItem("Add/Dialogue Node", FlowNodeType.Dialogue);
-            AddItem("Add/Delay Node", FlowNodeType.Delay);
-            AddItem("Add/WaitForTrigger Node", FlowNodeType.WaitForTrigger);
-            AddItem("Add/Objective Node", FlowNodeType.Objective);
-            AddItem("Add/Branch Node", FlowNodeType.Branch);
-            AddItem("Add/Sequence Node", FlowNodeType.Sequence);
-            AddItem("Add/Loop Node", FlowNodeType.Loop);
+        // Used by right-click context menu (DropdownMenu)
+        internal void AppendAddNodeActions(
+            DropdownMenu menu,
+            Vector2 graphPosition,
+            FlowNodeView fromNode,
+            int fromOutputIndex)
+        {
+            BuildAddNodeMenuItems(graphPosition, fromNode, fromOutputIndex,
+                (label, type) =>
+                {
+                    menu.AppendAction(label, action =>
+                    {
+                        var newView = CreateNode(type, graphPosition);
+                        if (fromNode != null && fromOutputIndex >= 0 &&
+                            newView != null && newView.InputPort != null)
+                        {
+                            var outPort = fromNode.GetOutputPortForIndex(fromOutputIndex);
+                            if (outPort != null)
+                            {
+                                var edge = outPort.ConnectTo(newView.InputPort);
+                                AddElement(edge);
+                            }
+                        }
+                    },
+                    _ => DropdownMenuAction.Status.Normal);
+                });
+        }
+
+        // Used by edge drag → empty space (GenericMenu)
+        internal void AppendAddNodeActions(
+            GenericMenu menu,
+            Vector2 graphPosition,
+            FlowNodeView fromNode,
+            int fromOutputIndex)
+        {
+            BuildAddNodeMenuItems(graphPosition, fromNode, fromOutputIndex,
+                (label, type) =>
+                {
+                    menu.AddItem(new GUIContent(label), false, () =>
+                    {
+                        var newView = CreateNode(type, graphPosition);
+                        if (fromNode != null && fromOutputIndex >= 0 &&
+                            newView != null && newView.InputPort != null)
+                        {
+                            var outPort = fromNode.GetOutputPortForIndex(fromOutputIndex);
+                            if (outPort != null && m_graph != null)
+                            {
+                                var def = FlowNodeEditorRegistry.Get(fromNode.NodeData.NodeType);
+
+                        // 🔹 Remove existing edges on this output
+                        foreach (var existing in outPort.connections.ToList())
+                                {
+                                    var oldToView = existing.input?.node as FlowNodeView;
+                                    if (oldToView != null)
+                                    {
+                                        def.OnEdgeDisconnected(fromNode.NodeData, fromOutputIndex, oldToView.NodeData);
+                                    }
+                                    RemoveElement(existing);
+                                }
+
+                        // Create the new edge
+                        var edge = outPort.ConnectTo(newView.InputPort);
+                                AddElement(edge);
+
+                        // Persist the new connection
+                        def.OnEdgeConnected(fromNode.NodeData, fromOutputIndex, newView.NodeData);
+                                EditorUtility.SetDirty(m_graph);
+                            }
+                        }
+                    });
+                });
         }
 
         internal FlowNodeView CreateNode(FlowNodeType type, Vector2 graphPosition)
@@ -660,8 +752,30 @@ namespace TacticsGame.Flow.Editor
                     if (fromView == null || toView == null)
                         continue;
 
+                    var outPort = edge.output as Port;
                     var def = FlowNodeEditorRegistry.Get(fromView.NodeData.NodeType);
                     int index = fromView.GetOutputPortIndex(edge.output);
+
+                    // 🔹 Enforce single connection on this output:
+                    // remove all other edges from this port and clear their data links
+                    if (outPort != null)
+                    {
+                        foreach (var existing in outPort.connections.ToList())
+                        {
+                            if (existing == edge)
+                                continue;
+
+                            var oldToView = existing.input?.node as FlowNodeView;
+                            if (oldToView != null)
+                            {
+                                def.OnEdgeDisconnected(fromView.NodeData, index, oldToView.NodeData);
+                            }
+
+                            RemoveElement(existing);
+                        }
+                    }
+
+                    // Now record the new connection in data
                     def.OnEdgeConnected(fromView.NodeData, index, toView.NodeData);
 
                     EditorUtility.SetDirty(m_graph);
