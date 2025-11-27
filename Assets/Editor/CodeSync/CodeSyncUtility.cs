@@ -5,9 +5,13 @@ using UnityEngine;
 
 public static class CodeSyncUtility
 {
+    // Absolute path to the code-only repo root (matches the PowerShell script)
+    private const string RepoRootPath = @"C:\Users\maxel\OneDrive\Documents\GitHub\MechGame_CodeOnly";
+
     [MenuItem("Tools/Sync Code To Git Repo")]
     public static void SyncCodeToGitRepo()
     {
+        // Unity project root = parent of Assets
         string projectRoot = Directory.GetParent(Application.dataPath).FullName;
         string scriptPath = Path.Combine(projectRoot, "Tools", "Sync-UnityCodeToGit.ps1");
 
@@ -71,5 +75,18 @@ public static class CodeSyncUtility
         {
             UnityEngine.Debug.LogError("Exception while running sync script: " + ex.Message);
         }
+    }
+
+    [MenuItem("Tools/Open Code Repo Folder")]
+    public static void OpenCodeRepoFolder()
+    {
+        if (!Directory.Exists(RepoRootPath))
+        {
+            UnityEngine.Debug.LogError("Code repo folder does not exist: " + RepoRootPath);
+            return;
+        }
+
+        // This opens the folder in Explorer/Finder
+        EditorUtility.RevealInFinder(RepoRootPath);
     }
 }
